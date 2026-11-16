@@ -139,11 +139,11 @@ public class PagoService {
         }
         try {
             var response = webpay.commit(token);
-            boolean authorized = "AUTHORIZED".equals(response.getStatus()) && response.getResponseCode() != null
-                    && response.getResponseCode() == 0;
+            int responseCode = response.getResponseCode();
+            boolean authorized = "AUTHORIZED".equals(response.getStatus()) && responseCode == 0;
             pago.setStatus(authorized ? "AUTHORIZED" : "REJECTED");
             pago.setAuthorizationCode(response.getAuthorizationCode());
-            pago.setResponseCode(response.getResponseCode());
+            pago.setResponseCode(responseCode);
             pago.setResultadoPublicado(false);
             pago = pagoRepository.save(pago);
         } catch (Exception e) {
