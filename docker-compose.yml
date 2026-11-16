@@ -1,0 +1,174 @@
+# =============================================================================
+# Backend_dev03 - Pedidos360
+# Broker Kafka (KRaft, sin Zookeeper) + ms-pagos + ms-recomendaciones
+#
+# EC2 de este stack expone:
+#   9092  Kafka (listener EXTERNAL, lo usa ms-ordenes desde la EC2 de Backend_dev02)
+#   8087  ms-pagos            (Webpay Plus + antifraude)
+#   8088  ms-recomendaciones  (motor simple de recomendaciones)
+#   8089  Kafka UI            (solo para demo / evaluación, proteger con Security Group)
+# =============================================================================
+services:
+
+  kafka:
+    image: apache/kafka:4.1.0
+    container_name: ecommerce-kafka
+    hostname: kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # INTERNAL: contenedores de esta EC2 | EXTERNAL: otras EC2 (ms-ordenes)
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://${KAFKA_ADVERTISED_HOST:-localhost}:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Los tópicos se crean explícitamente en kafka-init (no por accidente)
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx512m"
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-MkU3OEVBNTcwNTJENDM2Qk}
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - ecommerce-network
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 20s
+
+  # Crea los tópicos del dominio (idempotente: --if-not-exists) y termina.
+  kafka-init:
+    image: apache/kafka:4.1.0
+    container_name: ecommerce-kafka-init
+    restart: "no"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - ecommerce-network
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -e
+        B=kafka:29092
+        P=${KAFKA_TOPIC_PARTITIONS:-3}
+        for t in pagos.intentos pagos.resultados pagos.alertas-fraude recomendaciones.interacciones; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$B --create --if-not-exists --topic $$t --partitions $$P --replication-factor 1
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$B --create --if-not-exists --topic $$t.DLT --partitions 1 --replication-factor 1
+        done
+        echo "Topicos disponibles:"
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$B --list
+
+  kafka-ui:
+    image: ghcr.io/kafbat/kafka-ui:latest
+    container_name: ecommerce-kafka-ui
+    restart: unless-stopped
+    ports:
+      - "8089:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: pedidos360
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: "false"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - ecommerce-network
+
+  ms-pagos:
+    image: ${ECR_REGISTRY:-local}/ms-pagos:latest
+    build: ./ms-pagos
+    container_name: ecommerce-ms-pagos
+    restart: unless-stopped
+    ports:
+      - "8087:8087"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    networks:
+      - ecommerce-network
+    environment:
+      SERVER_PORT: 8087
+      JAVA_TOOL_OPTIONS: "-Xms128m -Xmx384m"
+      SPRING_DATASOURCE_URL: ${DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      ORDENES_SERVICE_URL: ${ORDENES_SERVICE_URL}
+      FRONTEND_URL: ${FRONTEND_URL}
+      TRANSBANK_COMMERCE_CODE: ${TRANSBANK_COMMERCE_CODE:-597055555532}
+      TRANSBANK_API_KEY: ${TRANSBANK_API_KEY:-}
+      TRANSBANK_ENVIRONMENT: ${TRANSBANK_ENVIRONMENT:-integration}
+      TRANSBANK_RETURN_URL: ${TRANSBANK_RETURN_URL}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      RABBITMQ_HOST: ${RABBITMQ_HOST}
+      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
+      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      FRAUD_MAX_ATTEMPTS: ${FRAUD_MAX_ATTEMPTS:-3}
+      FRAUD_WINDOW_SECONDS: ${FRAUD_WINDOW_SECONDS:-10}
+      FRAUD_BLOCK_MINUTES: ${FRAUD_BLOCK_MINUTES:-30}
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8087/actuator/health/liveness || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  ms-recomendaciones:
+    image: ${ECR_REGISTRY:-local}/ms-recomendaciones:latest
+    build: ./ms-recomendaciones
+    container_name: ecommerce-ms-recomendaciones
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    networks:
+      - ecommerce-network
+    environment:
+      SERVER_PORT: 8088
+      JAVA_TOOL_OPTIONS: "-Xms128m -Xmx384m"
+      SPRING_DATASOURCE_URL: ${DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+      PRODUCTOS_SERVICE_URL: ${PRODUCTOS_SERVICE_URL}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8088/actuator/health/liveness || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+volumes:
+  kafka-data:
+
+networks:
+  ecommerce-network:
+    external: true
+    name: ecommerce-network
