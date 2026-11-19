@@ -80,10 +80,8 @@ jobs:
           TRANSBANK_API_KEY=${{ secrets.TRANSBANK_API_KEY }}
           TRANSBANK_ENVIRONMENT=${{ secrets.TRANSBANK_ENVIRONMENT || 'integration' }}
           TRANSBANK_RETURN_URL=${{ secrets.TRANSBANK_RETURN_URL }}
-          RABBITMQ_HOST=${{ secrets.RABBITMQ_HOST }}
-          RABBITMQ_PORT=${{ secrets.RABBITMQ_PORT || '5672' }}
-          RABBITMQ_USERNAME=${{ secrets.RABBITMQ_USERNAME }}
-          RABBITMQ_PASSWORD=${{ secrets.RABBITMQ_PASSWORD }}
+          AWS_REGION=${{ env.AWS_REGION }}
+          DYNAMODB_TABLE=${{ secrets.DYNAMODB_TABLE || 'pedidos360-recomendaciones' }}
           EOF
           # Elimina los espacios en blanco al inicio de cada línea
           sed -i 's/^[ \t]*//' deploy.env
@@ -105,6 +103,7 @@ jobs:
               \"mkdir -p /home/ec2-user/app-dev03\",
               \"echo ${COMPOSE_BASE64} | base64 -d > /home/ec2-user/app-dev03/docker-compose.yml\",
               \"echo ${ENV_BASE64} | base64 -d > /home/ec2-user/app-dev03/.env\",
+              \"chown -R ec2-user:ec2-user /home/ec2-user/app-dev03\",
               \"chmod 600 /home/ec2-user/app-dev03/.env\",
               \"cd /home/ec2-user/app-dev03\",
               \"docker compose pull\",

@@ -5,7 +5,7 @@
 # EC2 de este stack expone:
 #   9092  Kafka (listener EXTERNAL, lo usa ms-ordenes desde la EC2 de Backend_dev02)
 #   8087  ms-pagos            (Webpay Plus + antifraude)
-#   8088  ms-recomendaciones  (motor simple de recomendaciones)
+#   8088  ms-recomendaciones  (motor simple de recomendaciones, datos en Amazon DynamoDB)
 #   8089  Kafka UI            (solo para demo / evaluación, proteger con Security Group)
 # =============================================================================
 services:
@@ -64,7 +64,7 @@ services:
         set -e
         B=kafka:29092
         P=${KAFKA_TOPIC_PARTITIONS:-3}
-        for t in pagos.intentos pagos.resultados pagos.alertas-fraude recomendaciones.interacciones; do
+        for t in pagos.intentos pagos.resultados pagos.alertas-fraude recomendaciones.interacciones auditoria.eventos; do
           /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$B --create --if-not-exists --topic $$t --partitions $$P --replication-factor 1
           /opt/kafka/bin/kafka-topics.sh --bootstrap-server $$B --create --if-not-exists --topic $$t.DLT --partitions 1 --replication-factor 1
         done
@@ -115,10 +115,6 @@ services:
       TRANSBANK_ENVIRONMENT: ${TRANSBANK_ENVIRONMENT:-integration}
       TRANSBANK_RETURN_URL: ${TRANSBANK_RETURN_URL}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      RABBITMQ_HOST: ${RABBITMQ_HOST}
-      RABBITMQ_PORT: ${RABBITMQ_PORT:-5672}
-      RABBITMQ_USERNAME: ${RABBITMQ_USERNAME}
-      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
       FRAUD_MAX_ATTEMPTS: ${FRAUD_MAX_ATTEMPTS:-3}
       FRAUD_WINDOW_SECONDS: ${FRAUD_WINDOW_SECONDS:-10}
       FRAUD_BLOCK_MINUTES: ${FRAUD_BLOCK_MINUTES:-30}
@@ -147,9 +143,10 @@ services:
     environment:
       SERVER_PORT: 8088
       JAVA_TOOL_OPTIONS: "-Xms128m -Xmx384m"
-      SPRING_DATASOURCE_URL: ${DATASOURCE_URL}
-      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      # DynamoDB: credenciales del rol de la EC2 (LabInstanceProfile), sin llaves en el .env
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      DYNAMODB_TABLE: ${DYNAMODB_TABLE:-pedidos360-recomendaciones}
+      DYNAMODB_CREATE_TABLE: ${DYNAMODB_CREATE_TABLE:-true}
       AZURE_TENANT_ID: ${AZURE_TENANT_ID}
       AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}

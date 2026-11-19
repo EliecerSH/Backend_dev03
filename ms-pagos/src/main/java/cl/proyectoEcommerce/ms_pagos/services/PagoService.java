@@ -31,6 +31,10 @@ public class PagoService {
     static final Set<String> ESTADOS_FINALES = Set.of("AUTHORIZED", "REJECTED", "CANCELLED");
     /** Estados desde los que se permite volver a iniciar un pago. */
     private static final Set<String> ESTADOS_REINTENTABLES = Set.of("ERROR", "REJECTED", "CANCELLED");
+    /** Ventana en la que un token Webpay recién creado se reutiliza ante un doble clic. */
+    private static final java.time.Duration TOKEN_REUTILIZABLE = java.time.Duration.ofMinutes(2);
+    /** Estados de ms-ordenes que admiten un pago. */
+    private static final Set<String> ESTADOS_ORDEN_PAGABLES = Set.of("PENDIENTE_PAGO", "PAGO_RECHAZADO");
 
     private final PagoRepository pagoRepository;
     private final OrdenService ordenService;
@@ -67,6 +71,11 @@ public class PagoService {
         if (order == null || !orderId.equals(order.id())) throw new IllegalArgumentException("No se encontró la orden.");
         if (!clientId.equals(order.usuarioOid())) throw new SecurityException("La orden no pertenece al usuario autenticado.");
         if ("PAGADA".equalsIgnoreCase(order.estado())) throw new IllegalStateException("La orden ya se encuentra pagada.");
+        if (order.estado() != null && !ESTADOS_ORDEN_PAGABLES.contains(order.estado().toUpperCase())) {
+            // Ej.: PROCESADA (ms-ordenes con PAGO_REQUERIDO=false ya descontó stock sin pasar por Webpay)
+            throw new IllegalStateException("La orden no está pendiente de pago (estado " + order.estado()
+                    + "). Revisa que ms-ordenes tenga PAGO_REQUERIDO=true.");
+        }
         if (order.total() == null || order.total().signum() <= 0) throw new IllegalArgumentException("El total de la orden no es válido.");
         BigDecimal amount;
         try {
@@ -76,11 +85,15 @@ public class PagoService {
         }
 
         Pago existing = pagoRepository.findByOrderId(orderId).orElse(null);
-        if (existing != null && "PENDING".equals(existing.getStatus()) && existing.getWebpayToken() != null) {
-            // Reintento del mismo botón: se reutiliza la transacción abierta (no cuenta como nuevo intento)
+        boolean pendiente = existing != null && "PENDING".equals(existing.getStatus());
+        if (pendiente && existing.getWebpayToken() != null && existing.getUpdatedAt() != null
+                && existing.getUpdatedAt().isAfter(Instant.now().minus(TOKEN_REUTILIZABLE))) {
+            // Doble clic en el botón: se reutiliza la transacción recién creada (no cuenta como nuevo intento)
             return new IniciarPagoResponse(orderId, existing.getWebpayUrl(), existing.getWebpayToken());
         }
-        if (existing != null && !ESTADOS_REINTENTABLES.contains(existing.getStatus())) {
+        // Un PENDING antiguo es un pago que nunca volvió de Webpay (cliente cerró la pestaña o el retorno falló):
+        // ese token ya no sirve, así que se crea una transacción nueva.
+        if (existing != null && !pendiente && !ESTADOS_REINTENTABLES.contains(existing.getStatus())) {
             throw new IllegalStateException("Esta orden ya tiene un pago registrado: " + existing.getStatus());
         }
 

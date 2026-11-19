@@ -7,6 +7,7 @@ import org.springframework.kafka.KafkaException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import software.amazon.awssdk.core.exception.SdkException;
 
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -30,6 +31,12 @@ public class ApiExceptionHandler {
     @ExceptionHandler(IllegalStateException.class)
     ResponseEntity<Map<String, String>> noDisponible(IllegalStateException ex) {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("message", ex.getMessage()));
+    }
+
+    @ExceptionHandler(SdkException.class)
+    ResponseEntity<Map<String, String>> dynamo(SdkException ex) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(Map.of("message", "El almacén de recomendaciones (DynamoDB) no está disponible."));
     }
 
     @ExceptionHandler(KafkaException.class)

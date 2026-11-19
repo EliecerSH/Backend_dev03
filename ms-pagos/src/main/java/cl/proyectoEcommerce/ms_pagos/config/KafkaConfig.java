@@ -36,6 +36,7 @@ import java.util.Map;
  *                            Lo consume el propio ms-pagos (velocity check antifraude).
  *  - pagos.resultados      : resultado final de Webpay (key = orderId). Lo consumen ms-ordenes y ms-recomendaciones.
  *  - pagos.alertas-fraude  : bloqueos antifraude (key = clientId) para monitoreo / auditoría.
+ *  - auditoria.eventos     : bitácora de hitos del pago (iniciado, authorized, ...). La consume ms-auditoria.
  *
  * Un mensaje que falla 3 veces se envía a {tópico}.DLT para no bloquear la partición (poison pill).
  */
@@ -103,12 +104,14 @@ public class KafkaConfig {
             @Value("${pagos.kafka.topics.intentos}") String intentos,
             @Value("${pagos.kafka.topics.resultados}") String resultados,
             @Value("${pagos.kafka.topics.alertas}") String alertas,
+            @Value("${pagos.kafka.topics.auditoria:auditoria.eventos}") String auditoria,
             @Value("${pagos.kafka.partitions:3}") int partitions,
             @Value("${pagos.kafka.replicas:1}") int replicas) {
         return new KafkaAdmin.NewTopics(
                 topic(intentos, partitions, replicas), topic(intentos + ".DLT", 1, replicas),
                 topic(resultados, partitions, replicas), topic(resultados + ".DLT", 1, replicas),
-                topic(alertas, partitions, replicas), topic(alertas + ".DLT", 1, replicas));
+                topic(alertas, partitions, replicas), topic(alertas + ".DLT", 1, replicas),
+                topic(auditoria, partitions, replicas), topic(auditoria + ".DLT", 1, replicas));
     }
 
     private static NewTopic topic(String name, int partitions, int replicas) {

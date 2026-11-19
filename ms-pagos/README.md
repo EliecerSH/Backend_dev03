@@ -14,7 +14,7 @@ Se despliega junto con Kafka y ms-recomendaciones desde el `docker-compose.yml` 
 | GET | `/api/pagos/orden/{orderId}` | dueño o Admin | Estado del pago de la orden |
 | GET | `/actuator/health` | pública | Salud (liveness/readiness) |
 
-Códigos de `/iniciar`: `429` bloqueo antifraude (incluye `blockedUntil`) · `403` orden de otro usuario · `404` orden inexistente · `409` orden ya pagada / pago en curso · `503` ms-ordenes o Kafka no disponible.
+Códigos de `/iniciar`: `429` bloqueo antifraude (incluye `blockedUntil`) · `403` orden de otro usuario · `404` orden inexistente · `409` orden ya pagada o que no está `PENDIENTE_PAGO`/`PAGO_RECHAZADO` · `503` ms-ordenes o Kafka no disponible.
 
 El cliente debe enviar un **formulario POST** a `url` con el campo oculto `token_ws` (ya implementado en `Frontend_dev/src/api/apiService.js → redirigirAWebpay`).
 
@@ -27,8 +27,9 @@ El cliente debe enviar un **formulario POST** a `url` con el campo oculto `token
 | `pagos.intentos` | produce y consume (group `ms-pagos-antifraude`) | `{clientId, amount, transactionId, timestamp, orderId}` |
 | `pagos.resultados` | produce | `{eventId, orderId, clientId, status, amount, authorizationCode, items[], occurredAt}` |
 | `pagos.alertas-fraude` | produce | `{eventId, clientId, tipo, intentosEnVentana, ventanaSegundos, orderId, bloqueadoHasta, occurredAt}` |
+| `auditoria.eventos` | produce | `{orderId, clientId, status, amount, timestamp}` con header `tipo-evento` = `pedidos360.pago.` + `iniciado`, `authorized`, `rejected`, `cancelled` o `bloqueado` |
 
-Además publica `pedidos360.pago.{iniciado|authorized|rejected|cancelled|bloqueado}` en el exchange RabbitMQ existente para que ms-auditoria los registre (best effort; RabbitMQ caído no afecta el pago).
+La auditoría (último tópico) la consume ms-auditoria. Es *best effort*: si falla, el pago sigue. ms-pagos ya **no usa RabbitMQ**.
 
 ## Antifraude
 

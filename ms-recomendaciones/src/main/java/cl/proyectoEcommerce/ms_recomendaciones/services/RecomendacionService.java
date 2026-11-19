@@ -5,14 +5,12 @@ import cl.proyectoEcommerce.ms_recomendaciones.dtos.RecomendacionesResponse;
 import cl.proyectoEcommerce.ms_recomendaciones.engine.MotorRecomendaciones;
 import cl.proyectoEcommerce.ms_recomendaciones.engine.MotorRecomendaciones.Interaccion;
 import cl.proyectoEcommerce.ms_recomendaciones.engine.MotorRecomendaciones.Recomendacion;
-import cl.proyectoEcommerce.ms_recomendaciones.repositories.InteraccionRepository;
+import cl.proyectoEcommerce.ms_recomendaciones.store.InteraccionStore;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -20,58 +18,40 @@ import java.util.Set;
 @Service
 public class RecomendacionService {
     private static final int LIMITE_MAXIMO = 20;
-    private final InteraccionRepository repository;
+    private static final int MAX_HISTORIAL = 200;
+    private final InteraccionStore store;
     private final CatalogoService catalogoService;
     private final int ventanaDias;
 
-    public RecomendacionService(InteraccionRepository repository, CatalogoService catalogoService,
+    public RecomendacionService(InteraccionStore store, CatalogoService catalogoService,
                                 @Value("${recomendaciones.ventana-dias:30}") int ventanaDias) {
-        this.repository = repository;
+        this.store = store;
         this.catalogoService = catalogoService;
         this.ventanaDias = ventanaDias;
     }
 
-    @Transactional(readOnly = true)
     public RecomendacionesResponse paraUsuario(String usuarioId, int limite) {
         Instant ahora = Instant.now();
-        List<Interaccion> historial = repository
-                .findTop200ByUsuarioIdAndOcurridoEnAfterOrderByOcurridoEnDesc(usuarioId, desde(ahora)).stream()
-                .map(i -> new Interaccion(i.getProductoId(), i.getCategoria(), i.getAccion(), i.getPeso(), i.getOcurridoEn()))
-                .toList();
-        List<Recomendacion> r = MotorRecomendaciones.personalizadas(historial, popularidad(ahora),
+        List<Interaccion> historial = store.historialUsuario(usuarioId, desde(ahora), MAX_HISTORIAL);
+        List<Recomendacion> r = MotorRecomendaciones.personalizadas(historial, store.popularidad(desde(ahora)),
                 catalogoService.productos(), ahora, acotar(limite));
         return new RecomendacionesResponse(historial.isEmpty() ? "POPULARES" : "PERSONALIZADA", toDto(r));
     }
 
-    @Transactional(readOnly = true)
     public RecomendacionesResponse populares(int limite) {
         Instant ahora = Instant.now();
-        return new RecomendacionesResponse("POPULARES", toDto(MotorRecomendaciones.populares(popularidad(ahora),
-                catalogoService.productos(), Set.of(), acotar(limite))));
+        return new RecomendacionesResponse("POPULARES", toDto(MotorRecomendaciones.populares(
+                store.popularidad(desde(ahora)), catalogoService.productos(), Set.of(), acotar(limite))));
     }
 
-    @Transactional(readOnly = true)
     public RecomendacionesResponse similares(Long productoId, int limite) {
-        Instant desde = desde(Instant.now());
-        List<String> usuarios = repository.usuariosQueInteractuaronCon(productoId, desde);
-        Map<Long, Double> co = usuarios.isEmpty() ? Map.of()
-                : agregar(repository.coocurrencia(usuarios, productoId, desde));
+        Map<Long, Double> co = store.coocurrencia(productoId, desde(Instant.now()));
         return new RecomendacionesResponse("SIMILARES", toDto(MotorRecomendaciones.similares(productoId, co,
                 catalogoService.productos(), acotar(limite))));
     }
 
-    private Map<Long, Double> popularidad(Instant ahora) {
-        return agregar(repository.popularidadDesde(desde(ahora)));
-    }
-
     private Instant desde(Instant ahora) {
         return ahora.minus(ventanaDias, ChronoUnit.DAYS);
-    }
-
-    private static Map<Long, Double> agregar(List<Object[]> filas) {
-        Map<Long, Double> m = new HashMap<>();
-        for (Object[] f : filas) m.put(((Number) f[0]).longValue(), ((Number) f[1]).doubleValue());
-        return m;
     }
 
     private static int acotar(int limite) {

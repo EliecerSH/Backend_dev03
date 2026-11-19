@@ -4,24 +4,6 @@ server:
 spring:
   application:
     name: ms-recomendaciones
-  datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/ecommerce_db}
-    username: ${SPRING_DATASOURCE_USERNAME:postgres}
-    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
-    driver-class-name: org.postgresql.Driver
-    hikari:
-      maximum-pool-size: 5
-  jpa:
-    database-platform: org.hibernate.dialect.PostgreSQLDialect
-    hibernate:
-      ddl-auto: ${SPRING_JPA_HIBERNATE_DDL_AUTO:update}
-    open-in-view: false
-    show-sql: false
-    properties:
-      hibernate:
-        default_schema: ${DB_SCHEMA:recomendaciones}
-        hbm2ddl:
-          create_namespaces: true
   security:
     oauth2:
       resourceserver:
@@ -39,6 +21,15 @@ spring:
       fail-fast: false
 
 recomendaciones:
+  dynamodb:
+    # Tabla única: historial por usuario, popularidad diaria, co-ocurrencia y deduplicación
+    table: ${DYNAMODB_TABLE:pedidos360-recomendaciones}
+    region: ${AWS_REGION:us-east-1}
+    # Vacío en AWS. Para DynamoDB Local: http://dynamodb-local:8000
+    endpoint: ${DYNAMODB_ENDPOINT:}
+    create-table: ${DYNAMODB_CREATE_TABLE:true}
+    # Días que DynamoDB conserva cada interacción antes de borrarla por TTL
+    ttl-dias: ${DYNAMODB_TTL_DIAS:60}
   kafka:
     partitions: ${KAFKA_TOPIC_PARTITIONS:3}
     replicas: ${KAFKA_TOPIC_REPLICAS:1}
