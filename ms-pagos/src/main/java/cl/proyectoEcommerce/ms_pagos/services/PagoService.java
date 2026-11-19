@@ -86,17 +86,11 @@ public class PagoService {
 
         Pago existing = pagoRepository.findByOrderId(orderId).orElse(null);
         boolean pendiente = existing != null && "PENDING".equals(existing.getStatus());
-        if (pendiente && existing.getWebpayToken() != null && existing.getUpdatedAt() != null
-                && existing.getUpdatedAt().isAfter(Instant.now().minus(TOKEN_REUTILIZABLE))) {
-            // Doble clic en el botón: se reutiliza la transacción recién creada (no cuenta como nuevo intento)
-            return new IniciarPagoResponse(orderId, existing.getWebpayUrl(), existing.getWebpayToken());
-        }
-        // Un PENDING antiguo es un pago que nunca volvió de Webpay (cliente cerró la pestaña o el retorno falló):
-        // ese token ya no sirve, así que se crea una transacción nueva.
         if (existing != null && !pendiente && !ESTADOS_REINTENTABLES.contains(existing.getStatus())) {
             throw new IllegalStateException("Esta orden ya tiene un pago registrado: " + existing.getStatus());
         }
 
+        // Gate antifraude: un cliente bloqueado no puede iniciar pagos
         Instant blockedUntil = antifraudeService.bloqueoActivoHasta(clientId);
         if (blockedUntil != null) {
             auditPublisher.publicar(orderId, clientId, "bloqueado", amount);
@@ -104,9 +98,20 @@ public class PagoService {
             throw new PagoBloqueadoException(blockedUntil);
         }
 
+        // TODA solicitud de pago cuenta como intento para el velocity check, incluso si después
+        // se reutiliza la transacción Webpay de un doble clic (antes esas repeticiones no se contaban
+        // y un cliente podía insistir sobre la misma orden sin que el antifraude lo viera).
         String attemptId = "TX-" + UUID.randomUUID();
         kafkaPublisher.publicarIntento(new IntentoPagoDTO(clientId, amount.longValueExact(), attemptId,
                 Instant.now(), orderId));
+
+        if (pendiente && existing.getWebpayToken() != null && existing.getUpdatedAt() != null
+                && existing.getUpdatedAt().isAfter(Instant.now().minus(TOKEN_REUTILIZABLE))) {
+            // Transacción recién creada: se reutiliza en vez de abrir otra en Webpay
+            return new IniciarPagoResponse(orderId, existing.getWebpayUrl(), existing.getWebpayToken());
+        }
+        // Un PENDING antiguo es un pago que nunca volvió de Webpay (cliente cerró la pestaña o el retorno falló):
+        // ese token ya no sirve, así que se crea una transacción nueva.
 
         String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 10);
         String buyOrder = "O" + Long.toString(orderId, 36) + "-" + suffix; // máx. 26 caracteres (Webpay)

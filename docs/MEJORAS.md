@@ -70,3 +70,14 @@ Observación sin cambio: ms-carrito usa `@CircuitBreaker` (Resilience4j para Boo
 - Exponer ms-pagos y ms-recomendaciones por **API Gateway (HTTPS)** como ms-ordenes, para evitar *mixed content* si el frontend se sirve por HTTPS.
 - `vite.config.js` usa `base: './'`: al recargar una ruta profunda como `/producto/5` los assets se piden en `/producto/assets/...` y la página queda en blanco. Si el frontend se sirve en la raíz del dominio, cambiar a `base: '/'`. (No afecta el retorno de WebPay a `/pedidos`.)
 - Kafka con 3 brokers y `replication-factor 3` en producción (en AWS Academy se usa 1 broker por costo).
+
+## Cambios v5: eliminar pedidos pendientes y prueba del antifraude
+
+| Dónde | Cambio |
+|---|---|
+| ms-ordenes | Nuevo `DELETE /api/v1/ordenes/{id}`. Solo el dueño (o un admin) puede eliminar, y solo pedidos `PENDIENTE_PAGO` o `PAGO_RECHAZADO` (otros estados → 409). Se registra el evento `pedidos360.orden.eliminada` en auditoría. Esos pedidos nunca descontaron stock ni se cobraron. |
+| ms-ordenes | Si llega un pago `AUTHORIZED` para un pedido que ya no existe, se registra en log de error y en auditoría (`pedidos360.orden.pago-sin-orden`) para revisión manual. |
+| ms-pagos | Cada solicitud a `/iniciar` cuenta como intento para el velocity check (antes, reutilizar el token de un pedido no contaba), así 3 solicitudes en 10 s bloquean al usuario 30 min aunque sean del mismo pedido. |
+| Frontend (Mis pedidos) | Botón **Eliminar** en pedidos pendientes/rechazados y panel **Prueba del antifraude** que envía 5 solicitudes seguidas sin ir a WebPay y muestra el código de cada una (200 / 429). Se oculta con `VITE_DEMO_ANTIFRAUDE=false`. |
+
+API Gateway: agregar la ruta `DELETE /api/v1/ordenes/{id}` (si no hay una `ANY /{proxy+}`) y permitir el método `DELETE` en la configuración CORS.
